@@ -1,5 +1,5 @@
 --- ipt_SYNPROXY.c.orig	2021-02-03 18:42:46.415465686 +0300
-+++ ipt_SYNPROXY.c	2021-02-24 16:18:55.527425115 +0300
++++ ipt_SYNPROXY.c	2021-02-25 17:42:57.246220268 +0300
 @@ -14,9 +14,13 @@
  #include <linux/netfilter/x_tables.h>
  #include <linux/netfilter/xt_SYNPROXY.h>
@@ -65,7 +65,7 @@
  	skb_reserve(nskb, MAX_TCP_HEADER);
  
  	niph = synproxy_build_ip(nskb, iph->saddr, iph->daddr);
-@@ -152,7 +161,36 @@ synproxy_send_server_syn(const struct sy
+@@ -152,8 +161,41 @@ synproxy_send_server_syn(const struct sy
  
  	synproxy_build_options(nth, opts);
  
@@ -82,28 +82,33 @@
 +		/* Acquire the lock to avoid the possible race with tcp_packet */
 +		spin_lock_bh(&ct->lock);
 +		if (!l4proto->new(ct, nskb, skb_network_offset(nskb) + sizeof(*iph), timeouts)) {
-+			nf_ct_kill(ct);
 +			goto err;
 +		}
 +
 +		if (!nfct_seqadj_ext_add(ct)) {
-+			nf_ct_kill(ct);
 +			goto err;
 +		}
 +		if (!nfct_synproxy_ext_add(ct)) {
-+			nf_ct_kill(ct);
 +			goto err;
 +		}
-+		tmpl = NULL;
-+err:
++
 +		spin_unlock_bh(&ct->lock);
++
++		tmpl = NULL;
 +	}
 +
++out:
 +	synproxy_send_tcp(snet, skb, nskb, tmpl, IP_CT_NEW,
  			  niph, nth, tcp_hdr_size);
++	return;
++err:
++	spin_unlock_bh(&ct->lock);
++	nf_ct_kill(ct);
++	goto out;
  }
  
-@@ -266,6 +304,10 @@ synproxy_tg4(struct sk_buff *skb, const
+ static void
+@@ -266,6 +308,10 @@ synproxy_tg4(struct sk_buff *skb, const
  	struct synproxy_options opts = {};
  	struct tcphdr *th, _th;
  
@@ -114,7 +119,7 @@
  	if (nf_ip_checksum(skb, par->hooknum, par->thoff, IPPROTO_TCP))
  		return NF_DROP;
  
-@@ -291,12 +333,20 @@ synproxy_tg4(struct sk_buff *skb, const
+@@ -291,12 +337,20 @@ synproxy_tg4(struct sk_buff *skb, const
  					  XT_SYNPROXY_OPT_SACK_PERM |
  					  XT_SYNPROXY_OPT_ECN);
  
@@ -135,7 +140,7 @@
  		return NF_DROP;
  	}
  
-@@ -320,6 +370,9 @@ static unsigned int ipv4_synproxy_hook(v
+@@ -320,6 +374,9 @@ static unsigned int ipv4_synproxy_hook(v
  	if (ct == NULL)
  		return NF_ACCEPT;
  
@@ -145,7 +150,7 @@
  	synproxy = nfct_synproxy(ct);
  	if (synproxy == NULL)
  		return NF_ACCEPT;
-@@ -449,6 +502,57 @@ static struct nf_hook_ops ipv4_synproxy_
+@@ -449,6 +506,57 @@ static struct nf_hook_ops ipv4_synproxy_
  	},
  };
  
@@ -203,7 +208,7 @@
  static int __init synproxy_tg4_init(void)
  {
  	int err;
-@@ -462,8 +566,14 @@ static int __init synproxy_tg4_init(void
+@@ -462,8 +570,14 @@ static int __init synproxy_tg4_init(void
  	if (err < 0)
  		goto err2;
  
@@ -218,7 +223,7 @@
  err2:
  	nf_unregister_hooks(ipv4_synproxy_ops, ARRAY_SIZE(ipv4_synproxy_ops));
  err1:
-@@ -472,6 +582,7 @@ err1:
+@@ -472,6 +586,7 @@ err1:
  
  static void __exit synproxy_tg4_exit(void)
  {

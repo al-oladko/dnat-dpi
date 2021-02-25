@@ -173,25 +173,29 @@ synproxy_send_server_syn(const struct synproxy_net *snet,
 		/* Acquire the lock to avoid the possible race with tcp_packet */
 		spin_lock_bh(&ct->lock);
 		if (!l4proto->new(ct, nskb, skb_network_offset(nskb) + sizeof(*iph), timeouts)) {
-			nf_ct_kill(ct);
 			goto err;
 		}
 
 		if (!nfct_seqadj_ext_add(ct)) {
-			nf_ct_kill(ct);
 			goto err;
 		}
 		if (!nfct_synproxy_ext_add(ct)) {
-			nf_ct_kill(ct);
 			goto err;
 		}
-		tmpl = NULL;
-err:
+
 		spin_unlock_bh(&ct->lock);
+
+		tmpl = NULL;
 	}
 
+out:
 	synproxy_send_tcp(snet, skb, nskb, tmpl, IP_CT_NEW,
 			  niph, nth, tcp_hdr_size);
+	return;
+err:
+	spin_unlock_bh(&ct->lock);
+	nf_ct_kill(ct);
+	goto out;
 }
 
 static void
