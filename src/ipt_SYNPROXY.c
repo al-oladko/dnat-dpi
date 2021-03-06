@@ -84,9 +84,14 @@ synproxy_send_client_synack(const struct synproxy_net *snet,
 	struct tcphdr *nth;
 	unsigned int tcp_hdr_size;
 	u16 mss = opts->mss;
+	__be32 saddr, daddr;
+	enum ip_conntrack_info ctinfo;
+	struct nf_conn *ct;
 
 	iph = ip_hdr(skb);
 	pr_debug("DBGSYN send synack %pI4 -> %pI4, mss %d\n", &iph->daddr, &iph->saddr, mss);
+
+	ct = nf_ct_get(skb, &ctinfo);
 
 	tcp_hdr_size = sizeof(*nth) + synproxy_options_size(opts);
 	nskb = alloc_skb(sizeof(*niph) + tcp_hdr_size + MAX_TCP_HEADER,
@@ -101,7 +106,15 @@ synproxy_send_client_synack(const struct synproxy_net *snet,
 	nth = (struct tcphdr *)skb_put(nskb, tcp_hdr_size);
 	nth->source	= th->dest;
 	nth->dest	= th->source;
+	saddr = iph->saddr;
+	daddr = iph->daddr;
+	if (ct) {
+		iph->saddr = ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.src.u3.ip;
+		iph->daddr = ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.dst.u3.ip;
+	}
 	nth->seq	= htonl(__cookie_v4_init_sequence(iph, th, &mss));
+	iph->saddr = saddr;
+	iph->daddr = daddr;
 	nth->ack_seq	= htonl(ntohl(th->seq) + 1);
 	tcp_flag_word(nth) = TCP_FLAG_SYN | TCP_FLAG_ACK;
 	if (opts->options & XT_SYNPROXY_OPT_ECN)
@@ -300,6 +313,11 @@ synproxy_recv_client_ack(const struct synproxy_net *snet,
 	return true;
 }
 
+static int synproxy_dummy_ouput(struct net *net, struct sock *sk, struct sk_buff *skb)
+{
+	return 0;
+}
+
 static unsigned int
 synproxy_tg4(struct sk_buff *skb, const struct xt_action_param *par)
 {
@@ -338,6 +356,17 @@ synproxy_tg4(struct sk_buff *skb, const struct xt_action_param *par)
 					  XT_SYNPROXY_OPT_ECN);
 
 		if (ct) {
+			struct net_device *dev = skb_dst(skb)->dev;
+			struct net_device *orig_dev = skb->dev;
+
+			skb->dev = dev;
+			skb->protocol = htons(ETH_P_IP);
+
+			NF_HOOK(NFPROTO_IPV4, NF_INET_POST_ROUTING,
+					par->net, skb->sk, skb, NULL, skb->dev,
+					synproxy_dummy_ouput);
+			skb->dev = orig_dev;
+
 			nf_conntrack_confirm(skb);
 			ct->mark = SYNPROXY_IN_PROGRESS;
 		}
