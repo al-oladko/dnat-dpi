@@ -40,8 +40,6 @@ Steps to allow TCP flow
 ```
 The first data packet is dropped in step 4. Synproxy updates TCP window in step 8. This forces the client to retransmit packet #4 due to ack of packet #3. Therefore, there is no need to store packet #4. 
 
-NAT is not supported yet.
-
 ## Installation
 
 1. Copy iptables extensions
